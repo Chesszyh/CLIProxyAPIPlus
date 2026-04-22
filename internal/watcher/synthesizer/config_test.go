@@ -511,6 +511,98 @@ func TestConfigSynthesizer_OpenAICompat_FallbackWithModels(t *testing.T) {
 	}
 }
 
+func TestConfigSynthesizer_OpenCode(t *testing.T) {
+	synth := NewConfigSynthesizer()
+	ctx := &SynthesisContext{
+		Config: &config.Config{
+			OpenCode: []config.OpenCodeKey{
+				{
+					ServerPassword: "opencode",
+					BaseURL:        " http://127.0.0.1:4096 ",
+					Prefix:         "local",
+					ProxyURL:       "direct",
+					Priority:       3,
+					Models: []config.OpenCodeModel{
+						{Name: "opencode/big-pickle", Alias: "big-pickle"},
+					},
+					Headers:        map[string]string{"X-OpenCode": "enabled"},
+					ExcludedModels: []string{"opencode/minimax*"},
+				},
+			},
+		},
+		Now:         time.Now(),
+		IDGenerator: NewStableIDGenerator(),
+	}
+
+	auths, err := synth.Synthesize(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(auths) != 1 {
+		t.Fatalf("expected 1 auth, got %d", len(auths))
+	}
+
+	auth := auths[0]
+	if auth.Provider != "opencode" {
+		t.Fatalf("expected provider opencode, got %s", auth.Provider)
+	}
+	if auth.Label != "opencode" {
+		t.Fatalf("expected label opencode, got %s", auth.Label)
+	}
+	if auth.Prefix != "local" {
+		t.Fatalf("expected prefix local, got %s", auth.Prefix)
+	}
+	if auth.ProxyURL != "direct" {
+		t.Fatalf("expected proxy URL direct, got %s", auth.ProxyURL)
+	}
+	if auth.Attributes["base_url"] != "http://127.0.0.1:4096" {
+		t.Fatalf("expected trimmed base_url, got %q", auth.Attributes["base_url"])
+	}
+	if auth.Attributes["server_password"] != "opencode" {
+		t.Fatalf("expected server password attribute, got %q", auth.Attributes["server_password"])
+	}
+	if auth.Attributes["auto_start"] != "true" {
+		t.Fatalf("expected auto_start true, got %q", auth.Attributes["auto_start"])
+	}
+	if auth.Attributes["disable_tools"] != "true" {
+		t.Fatalf("expected disable_tools true, got %q", auth.Attributes["disable_tools"])
+	}
+	if auth.Attributes["priority"] != "3" {
+		t.Fatalf("expected priority attribute 3, got %q", auth.Attributes["priority"])
+	}
+	if auth.Attributes["header:X-OpenCode"] != "enabled" {
+		t.Fatalf("expected custom header attribute, got %q", auth.Attributes["header:X-OpenCode"])
+	}
+	if auth.Attributes["excluded_models"] != "opencode/minimax*" {
+		t.Fatalf("expected excluded model attribute, got %q", auth.Attributes["excluded_models"])
+	}
+}
+
+func TestConfigSynthesizer_OpenCodeDisabled(t *testing.T) {
+	enabled := false
+	synth := NewConfigSynthesizer()
+	ctx := &SynthesisContext{
+		Config: &config.Config{
+			OpenCode: []config.OpenCodeKey{
+				{
+					Enabled: &enabled,
+					BaseURL: "http://127.0.0.1:4096",
+				},
+			},
+		},
+		Now:         time.Now(),
+		IDGenerator: NewStableIDGenerator(),
+	}
+
+	auths, err := synth.Synthesize(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(auths) != 0 {
+		t.Fatalf("expected disabled opencode config to synthesize no auths, got %d", len(auths))
+	}
+}
+
 func TestConfigSynthesizer_VertexCompat_WithModels(t *testing.T) {
 	synth := NewConfigSynthesizer()
 	ctx := &SynthesisContext{

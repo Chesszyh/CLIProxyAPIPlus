@@ -22,6 +22,7 @@ import (
 const (
 	DefaultPanelGitHubRepository = "https://github.com/router-for-me/Cli-Proxy-API-Management-Center"
 	DefaultPprofAddr             = "127.0.0.1:8316"
+	DefaultOpenCodeBaseURL       = "http://127.0.0.1:4096"
 )
 
 // Config represents the application's configuration, loaded from a YAML file.
@@ -99,6 +100,17 @@ type Config struct {
 	// GeminiKey defines Gemini API key configurations with optional routing overrides.
 	GeminiKey []GeminiKey `yaml:"gemini-api-key" json:"gemini-api-key"`
 
+	// KiroKey defines a list of Kiro (AWS CodeWhisperer) configurations.
+	KiroKey []KiroKey `yaml:"kiro" json:"kiro"`
+
+	// KiroFingerprint defines a global fingerprint configuration for all Kiro requests.
+	// When set, all Kiro requests will use this fixed fingerprint instead of random generation.
+	KiroFingerprint *KiroFingerprintConfig `yaml:"kiro-fingerprint,omitempty" json:"kiro-fingerprint,omitempty"`
+
+	// KiroPreferredEndpoint sets the global default preferred endpoint for all Kiro providers.
+	// Values: "ide" (default, CodeWhisperer) or "cli" (Amazon Q).
+	KiroPreferredEndpoint string `yaml:"kiro-preferred-endpoint" json:"kiro-preferred-endpoint"`
+
 	// Codex defines a list of Codex API key configurations as specified in the YAML configuration file.
 	CodexKey []CodexKey `yaml:"codex-api-key" json:"codex-api-key"`
 
@@ -116,6 +128,9 @@ type Config struct {
 	// OpenAICompatibility defines OpenAI API compatibility configurations for external providers.
 	OpenAICompatibility []OpenAICompatibility `yaml:"openai-compatibility" json:"openai-compatibility"`
 
+	// OpenCode defines local OpenCode server integrations. OpenCode manages its own provider credentials.
+	OpenCode []OpenCodeKey `yaml:"opencode" json:"opencode"`
+
 	// VertexCompatAPIKey defines Vertex AI-compatible API key configurations for third-party providers.
 	// Used for services that use Vertex AI-style paths but with simple API key authentication.
 	VertexCompatAPIKey []VertexCompatKey `yaml:"vertex-api-key" json:"vertex-api-key"`
@@ -124,11 +139,12 @@ type Config struct {
 	AmpCode AmpCode `yaml:"ampcode" json:"ampcode"`
 
 	// OAuthExcludedModels defines per-provider global model exclusions applied to OAuth/file-backed auth entries.
+	// Supported channels: gemini-cli, vertex, aistudio, antigravity, claude, codex, iflow, kiro, github-copilot, kimi, opencode.
 	OAuthExcludedModels map[string][]string `yaml:"oauth-excluded-models,omitempty" json:"oauth-excluded-models,omitempty"`
 
 	// OAuthModelAlias defines global model name aliases for OAuth/file-backed auth channels.
 	// These aliases affect both model listing and model routing for supported channels:
-	// gemini-cli, vertex, aistudio, antigravity, claude, codex, kimi.
+	// gemini-cli, vertex, aistudio, antigravity, claude, codex, iflow, kiro, github-copilot, kimi, opencode.
 	//
 	// NOTE: This does not apply to existing per-credential model alias features under:
 	// gemini-api-key, codex-api-key, claude-api-key, openai-compatibility, vertex-api-key, and ampcode.
@@ -136,6 +152,11 @@ type Config struct {
 
 	// Payload defines default and override rules for provider payload parameters.
 	Payload PayloadConfig `yaml:"payload" json:"payload"`
+
+	// IncognitoBrowser enables opening OAuth URLs in incognito/private browsing mode.
+	// This is useful when you want to login with a different account without logging out
+	// from your current session. Default: false.
+	IncognitoBrowser bool `yaml:"incognito-browser" json:"incognito-browser"`
 
 	legacyMigrationPending bool `yaml:"-" json:"-"`
 }
@@ -508,6 +529,52 @@ type GeminiModel struct {
 func (m GeminiModel) GetName() string  { return m.Name }
 func (m GeminiModel) GetAlias() string { return m.Alias }
 
+// KiroKey represents the configuration for Kiro (AWS CodeWhisperer) authentication.
+type KiroKey struct {
+	// TokenFile is the path to the Kiro token file (default: ~/.aws/sso/cache/kiro-auth-token.json)
+	TokenFile string `yaml:"token-file,omitempty" json:"token-file,omitempty"`
+
+	// AccessToken is the OAuth access token for direct configuration.
+	AccessToken string `yaml:"access-token,omitempty" json:"access-token,omitempty"`
+
+	// RefreshToken is the OAuth refresh token for token renewal.
+	RefreshToken string `yaml:"refresh-token,omitempty" json:"refresh-token,omitempty"`
+
+	// ProfileArn is the AWS CodeWhisperer profile ARN.
+	ProfileArn string `yaml:"profile-arn,omitempty" json:"profile-arn,omitempty"`
+
+	// Region is the AWS region (default: us-east-1).
+	Region string `yaml:"region,omitempty" json:"region,omitempty"`
+
+	// StartURL is the IAM Identity Center (IDC) start URL for SSO login.
+	StartURL string `yaml:"start-url,omitempty" json:"start-url,omitempty"`
+
+	// ProxyURL optionally overrides the global proxy for this configuration.
+	ProxyURL string `yaml:"proxy-url,omitempty" json:"proxy-url,omitempty"`
+
+	// AgentTaskType sets the Kiro API task type. Known values: "vibe", "dev", "chat".
+	// Leave empty to let API use defaults. Different values may inject different system prompts.
+	AgentTaskType string `yaml:"agent-task-type,omitempty" json:"agent-task-type,omitempty"`
+
+	// PreferredEndpoint sets the preferred Kiro API endpoint/quota.
+	// Values: "codewhisperer" (default, IDE quota) or "amazonq" (CLI quota).
+	PreferredEndpoint string `yaml:"preferred-endpoint,omitempty" json:"preferred-endpoint,omitempty"`
+}
+
+// KiroFingerprintConfig defines a global fingerprint configuration for Kiro requests.
+// When configured, all Kiro requests will use this fixed fingerprint instead of random generation.
+// Empty fields will fall back to random selection from built-in pools.
+type KiroFingerprintConfig struct {
+	OIDCSDKVersion      string `yaml:"oidc-sdk-version,omitempty" json:"oidc-sdk-version,omitempty"`
+	RuntimeSDKVersion   string `yaml:"runtime-sdk-version,omitempty" json:"runtime-sdk-version,omitempty"`
+	StreamingSDKVersion string `yaml:"streaming-sdk-version,omitempty" json:"streaming-sdk-version,omitempty"`
+	OSType              string `yaml:"os-type,omitempty" json:"os-type,omitempty"`
+	OSVersion           string `yaml:"os-version,omitempty" json:"os-version,omitempty"`
+	NodeVersion         string `yaml:"node-version,omitempty" json:"node-version,omitempty"`
+	KiroVersion         string `yaml:"kiro-version,omitempty" json:"kiro-version,omitempty"`
+	KiroHash            string `yaml:"kiro-hash,omitempty" json:"kiro-hash,omitempty"`
+}
+
 // OpenAICompatibility represents the configuration for OpenAI API compatibility
 // with external providers, allowing model aliases to be routed through OpenAI API format.
 type OpenAICompatibility struct {
@@ -560,6 +627,68 @@ type OpenAICompatibilityModel struct {
 func (m OpenAICompatibilityModel) GetName() string  { return m.Name }
 func (m OpenAICompatibilityModel) GetAlias() string { return m.Alias }
 
+// OpenCodeKey represents a local OpenCode server integration.
+// OpenCode owns provider OAuth/API-key credentials; this config only controls
+// how CLIProxyAPI talks to the local OpenCode server.
+type OpenCodeKey struct {
+	// Enabled controls whether this OpenCode integration is active.
+	// Nil defaults to true.
+	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+
+	// Priority controls selection preference when multiple credentials match.
+	// Higher values are preferred; defaults to 0.
+	Priority int `yaml:"priority,omitempty" json:"priority,omitempty"`
+
+	// Prefix optionally namespaces models for this credential (e.g., "local/minimax-m2.5-free").
+	Prefix string `yaml:"prefix,omitempty" json:"prefix,omitempty"`
+
+	// BaseURL is the local OpenCode server endpoint.
+	// If empty, DefaultOpenCodeBaseURL is used.
+	BaseURL string `yaml:"base-url,omitempty" json:"base-url,omitempty"`
+
+	// ServerPassword is sent as OpenCode server Basic auth when OPENCODE_SERVER_PASSWORD is set.
+	ServerPassword string `yaml:"server-password,omitempty" json:"server-password,omitempty"`
+
+	// Command is the executable used for auto-start. Defaults to "opencode".
+	Command string `yaml:"command,omitempty" json:"command,omitempty"`
+
+	// AutoStart controls whether CLIProxyAPI may start "opencode serve" when the server is unavailable.
+	// Nil defaults to true.
+	AutoStart *bool `yaml:"auto-start,omitempty" json:"auto-start,omitempty"`
+
+	// DisableTools controls whether OpenCode built-in tools are disabled for model-only proxy use.
+	// Nil defaults to true.
+	DisableTools *bool `yaml:"disable-tools,omitempty" json:"disable-tools,omitempty"`
+
+	// ProxyURL optionally overrides the global proxy for this local server.
+	ProxyURL string `yaml:"proxy-url,omitempty" json:"proxy-url,omitempty"`
+
+	// Models defines upstream provider/model names and aliases for request routing.
+	Models []OpenCodeModel `yaml:"models,omitempty" json:"models,omitempty"`
+
+	// Headers optionally adds extra HTTP headers for requests sent to the OpenCode server.
+	Headers map[string]string `yaml:"headers,omitempty" json:"headers,omitempty"`
+
+	// ExcludedModels lists model IDs that should be excluded for this provider.
+	ExcludedModels []string `yaml:"excluded-models,omitempty" json:"excluded-models,omitempty"`
+}
+
+func (k OpenCodeKey) GetAPIKey() string  { return k.ServerPassword }
+func (k OpenCodeKey) GetBaseURL() string { return k.BaseURL }
+
+// OpenCodeModel describes a mapping between a client alias and an OpenCode model identifier.
+// Model names use "providerID/modelID" form, for example "opencode/minimax-m2.5-free".
+type OpenCodeModel struct {
+	// Name is the OpenCode provider/model identifier used when issuing requests.
+	Name string `yaml:"name" json:"name"`
+
+	// Alias is the client-facing model name that maps to Name.
+	Alias string `yaml:"alias" json:"alias"`
+}
+
+func (m OpenCodeModel) GetName() string  { return m.Name }
+func (m OpenCodeModel) GetAlias() string { return m.Alias }
+
 // LoadConfig reads a YAML configuration file from the given path,
 // unmarshals it into a Config struct, applies environment variable overrides,
 // and returns it.
@@ -608,6 +737,7 @@ func LoadConfigOptional(configFile string, optional bool) (*Config, error) {
 	cfg.Pprof.Addr = DefaultPprofAddr
 	cfg.AmpCode.RestrictManagementToLocalhost = false // Default to false: API key auth is sufficient
 	cfg.RemoteManagement.PanelGitHubRepository = DefaultPanelGitHubRepository
+	cfg.IncognitoBrowser = false // Default to normal browser (AWS uses incognito by force)
 	if err = yaml.Unmarshal(data, &cfg); err != nil {
 		if optional {
 			// In cloud deploy mode, if YAML parsing fails, return empty config instead of error.
@@ -686,8 +816,14 @@ func LoadConfigOptional(configFile string, optional bool) (*Config, error) {
 	// Sanitize Claude key headers
 	cfg.SanitizeClaudeKeys()
 
+	// Sanitize Kiro keys: trim whitespace from credential fields
+	cfg.SanitizeKiroKeys()
+
 	// Sanitize OpenAI compatibility providers: drop entries without base-url
 	cfg.SanitizeOpenAICompatibility()
+
+	// Sanitize OpenCode local server entries.
+	cfg.SanitizeOpenCode()
 
 	// Normalize OAuth provider model exclusion map.
 	cfg.OAuthExcludedModels = NormalizeOAuthExcludedModels(cfg.OAuthExcludedModels)
@@ -799,14 +935,46 @@ func (cfg *Config) SanitizeClaudeHeaderDefaults() {
 // SanitizeOAuthModelAlias normalizes and deduplicates global OAuth model name aliases.
 // It trims whitespace, normalizes channel keys to lower-case, drops empty entries,
 // allows multiple aliases per upstream name, and ensures aliases are unique within each channel.
+// It also injects default aliases for channels that have built-in defaults (e.g., kiro)
+// when no user-configured aliases exist for those channels.
 func (cfg *Config) SanitizeOAuthModelAlias() {
-	if cfg == nil || len(cfg.OAuthModelAlias) == 0 {
+	if cfg == nil {
+		return
+	}
+
+	// Inject channel defaults when the channel is absent in user config.
+	// Presence is checked case-insensitively and includes explicit nil/empty markers.
+	if cfg.OAuthModelAlias == nil {
+		cfg.OAuthModelAlias = make(map[string][]OAuthModelAlias)
+	}
+	hasChannel := func(channel string) bool {
+		for k := range cfg.OAuthModelAlias {
+			if strings.EqualFold(strings.TrimSpace(k), channel) {
+				return true
+			}
+		}
+		return false
+	}
+	if !hasChannel("kiro") {
+		cfg.OAuthModelAlias["kiro"] = defaultKiroAliases()
+	}
+	if !hasChannel("github-copilot") {
+		cfg.OAuthModelAlias["github-copilot"] = defaultGitHubCopilotAliases()
+	}
+
+	if len(cfg.OAuthModelAlias) == 0 {
 		return
 	}
 	out := make(map[string][]OAuthModelAlias, len(cfg.OAuthModelAlias))
 	for rawChannel, aliases := range cfg.OAuthModelAlias {
 		channel := strings.ToLower(strings.TrimSpace(rawChannel))
-		if channel == "" || len(aliases) == 0 {
+		if channel == "" {
+			continue
+		}
+		// Preserve channels that were explicitly set to empty/nil – they act
+		// as "disabled" markers so default injection won't re-add them (#222).
+		if len(aliases) == 0 {
+			out[channel] = nil
 			continue
 		}
 		seenAlias := make(map[string]struct{}, len(aliases))
@@ -857,6 +1025,32 @@ func (cfg *Config) SanitizeOpenAICompatibility() {
 	cfg.OpenAICompatibility = out
 }
 
+// SanitizeOpenCode normalizes local OpenCode server entries.
+func (cfg *Config) SanitizeOpenCode() {
+	if cfg == nil || len(cfg.OpenCode) == 0 {
+		return
+	}
+	out := make([]OpenCodeKey, 0, len(cfg.OpenCode))
+	for i := range cfg.OpenCode {
+		entry := cfg.OpenCode[i]
+		entry.Prefix = normalizeModelPrefix(entry.Prefix)
+		entry.BaseURL = strings.TrimSpace(entry.BaseURL)
+		if entry.BaseURL == "" {
+			entry.BaseURL = DefaultOpenCodeBaseURL
+		}
+		entry.ServerPassword = strings.TrimSpace(entry.ServerPassword)
+		entry.Command = strings.TrimSpace(entry.Command)
+		if entry.Command == "" {
+			entry.Command = "opencode"
+		}
+		entry.ProxyURL = strings.TrimSpace(entry.ProxyURL)
+		entry.Headers = NormalizeHeaders(entry.Headers)
+		entry.ExcludedModels = NormalizeExcludedModels(entry.ExcludedModels)
+		out = append(out, entry)
+	}
+	cfg.OpenCode = out
+}
+
 // SanitizeCodexKeys removes Codex API key entries missing a BaseURL.
 // It trims whitespace and preserves order for remaining entries.
 func (cfg *Config) SanitizeCodexKeys() {
@@ -888,6 +1082,23 @@ func (cfg *Config) SanitizeClaudeKeys() {
 		entry.Prefix = normalizeModelPrefix(entry.Prefix)
 		entry.Headers = NormalizeHeaders(entry.Headers)
 		entry.ExcludedModels = NormalizeExcludedModels(entry.ExcludedModels)
+	}
+}
+
+// SanitizeKiroKeys trims whitespace from Kiro credential fields.
+func (cfg *Config) SanitizeKiroKeys() {
+	if cfg == nil || len(cfg.KiroKey) == 0 {
+		return
+	}
+	for i := range cfg.KiroKey {
+		entry := &cfg.KiroKey[i]
+		entry.TokenFile = strings.TrimSpace(entry.TokenFile)
+		entry.AccessToken = strings.TrimSpace(entry.AccessToken)
+		entry.RefreshToken = strings.TrimSpace(entry.RefreshToken)
+		entry.ProfileArn = strings.TrimSpace(entry.ProfileArn)
+		entry.Region = strings.TrimSpace(entry.Region)
+		entry.ProxyURL = strings.TrimSpace(entry.ProxyURL)
+		entry.PreferredEndpoint = strings.TrimSpace(entry.PreferredEndpoint)
 	}
 }
 

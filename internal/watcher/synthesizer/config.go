@@ -5,12 +5,15 @@ import (
 	"strconv"
 	"strings"
 
+	kiroauth "github.com/router-for-me/CLIProxyAPI/v6/internal/auth/kiro"
+	appconfig "github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/watcher/diff"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
+	log "github.com/sirupsen/logrus"
 )
 
 // ConfigSynthesizer generates Auth entries from configuration API keys.
-// It handles Gemini, Claude, Codex, OpenAI-compat, and Vertex-compat providers.
+// It handles Gemini, Claude, Codex, OpenCode, OpenAI-compat, and Vertex-compat providers.
 type ConfigSynthesizer struct{}
 
 // NewConfigSynthesizer creates a new ConfigSynthesizer instance.
@@ -31,8 +34,12 @@ func (s *ConfigSynthesizer) Synthesize(ctx *SynthesisContext) ([]*coreauth.Auth,
 	out = append(out, s.synthesizeClaudeKeys(ctx)...)
 	// Codex API Keys
 	out = append(out, s.synthesizeCodexKeys(ctx)...)
+	// Kiro (AWS CodeWhisperer)
+	out = append(out, s.synthesizeKiroKeys(ctx)...)
 	// OpenAI-compat
 	out = append(out, s.synthesizeOpenAICompat(ctx)...)
+	// OpenCode local server
+	out = append(out, s.synthesizeOpenCode(ctx)...)
 	// Vertex-compat
 	out = append(out, s.synthesizeVertexCompat(ctx)...)
 
@@ -272,6 +279,70 @@ func (s *ConfigSynthesizer) synthesizeOpenAICompat(ctx *SynthesisContext) []*cor
 	return out
 }
 
+// synthesizeOpenCode creates Auth entries for local OpenCode servers.
+func (s *ConfigSynthesizer) synthesizeOpenCode(ctx *SynthesisContext) []*coreauth.Auth {
+	cfg := ctx.Config
+	now := ctx.Now
+	idGen := ctx.IDGenerator
+
+	out := make([]*coreauth.Auth, 0, len(cfg.OpenCode))
+	for i := range cfg.OpenCode {
+		entry := &cfg.OpenCode[i]
+		if entry.Enabled != nil && !*entry.Enabled {
+			continue
+		}
+		prefix := strings.TrimSpace(entry.Prefix)
+		base := strings.TrimSpace(entry.BaseURL)
+		if base == "" {
+			base = appconfig.DefaultOpenCodeBaseURL
+		}
+		serverPassword := strings.TrimSpace(entry.ServerPassword)
+		command := strings.TrimSpace(entry.Command)
+		if command == "" {
+			command = "opencode"
+		}
+		proxyURL := strings.TrimSpace(entry.ProxyURL)
+		id, token := idGen.Next("opencode", base, serverPassword, proxyURL, command)
+		attrs := map[string]string{
+			"source":        fmt.Sprintf("config:opencode[%s]", token),
+			"base_url":      base,
+			"command":       command,
+			"auto_start":    "true",
+			"disable_tools": "true",
+		}
+		if serverPassword != "" {
+			attrs["server_password"] = serverPassword
+		}
+		if entry.AutoStart != nil && !*entry.AutoStart {
+			attrs["auto_start"] = "false"
+		}
+		if entry.DisableTools != nil && !*entry.DisableTools {
+			attrs["disable_tools"] = "false"
+		}
+		if entry.Priority != 0 {
+			attrs["priority"] = strconv.Itoa(entry.Priority)
+		}
+		if hash := diff.ComputeOpenCodeModelsHash(entry.Models); hash != "" {
+			attrs["models_hash"] = hash
+		}
+		addConfigHeadersToAttrs(entry.Headers, attrs)
+		a := &coreauth.Auth{
+			ID:         id,
+			Provider:   "opencode",
+			Label:      "opencode",
+			Prefix:     prefix,
+			Status:     coreauth.StatusActive,
+			ProxyURL:   proxyURL,
+			Attributes: attrs,
+			CreatedAt:  now,
+			UpdatedAt:  now,
+		}
+		ApplyAuthExcludedModelsMeta(a, cfg, entry.ExcludedModels, "oauth")
+		out = append(out, a)
+	}
+	return out
+}
+
 // synthesizeVertexCompat creates Auth entries for Vertex-compatible providers.
 func (s *ConfigSynthesizer) synthesizeVertexCompat(ctx *SynthesisContext) []*coreauth.Auth {
 	cfg := ctx.Config
@@ -316,6 +387,99 @@ func (s *ConfigSynthesizer) synthesizeVertexCompat(ctx *SynthesisContext) []*cor
 			UpdatedAt:  now,
 		}
 		ApplyAuthExcludedModelsMeta(a, cfg, compat.ExcludedModels, "apikey")
+		out = append(out, a)
+	}
+	return out
+}
+
+// synthesizeKiroKeys creates Auth entries for Kiro (AWS CodeWhisperer) tokens.
+func (s *ConfigSynthesizer) synthesizeKiroKeys(ctx *SynthesisContext) []*coreauth.Auth {
+	cfg := ctx.Config
+	now := ctx.Now
+	idGen := ctx.IDGenerator
+
+	if len(cfg.KiroKey) == 0 {
+		return nil
+	}
+
+	out := make([]*coreauth.Auth, 0, len(cfg.KiroKey))
+	kAuth := kiroauth.NewKiroAuth(cfg)
+
+	for i := range cfg.KiroKey {
+		kk := cfg.KiroKey[i]
+		var accessToken, profileArn, refreshToken string
+
+		// Try to load from token file first
+		if kk.TokenFile != "" && kAuth != nil {
+			tokenData, err := kAuth.LoadTokenFromFile(kk.TokenFile)
+			if err != nil {
+				log.Warnf("failed to load kiro token file %s: %v", kk.TokenFile, err)
+			} else {
+				accessToken = tokenData.AccessToken
+				profileArn = tokenData.ProfileArn
+				refreshToken = tokenData.RefreshToken
+			}
+		}
+
+		// Override with direct config values if provided
+		if kk.AccessToken != "" {
+			accessToken = kk.AccessToken
+		}
+		if kk.ProfileArn != "" {
+			profileArn = kk.ProfileArn
+		}
+		if kk.RefreshToken != "" {
+			refreshToken = kk.RefreshToken
+		}
+
+		if accessToken == "" {
+			log.Warnf("kiro config[%d] missing access_token, skipping", i)
+			continue
+		}
+
+		// profileArn is optional for AWS Builder ID users
+		id, token := idGen.Next("kiro:token", accessToken, profileArn)
+		attrs := map[string]string{
+			"source":       fmt.Sprintf("config:kiro[%s]", token),
+			"access_token": accessToken,
+		}
+		if profileArn != "" {
+			attrs["profile_arn"] = profileArn
+		}
+		if kk.Region != "" {
+			attrs["region"] = kk.Region
+		}
+		if kk.AgentTaskType != "" {
+			attrs["agent_task_type"] = kk.AgentTaskType
+		}
+		if kk.PreferredEndpoint != "" {
+			attrs["preferred_endpoint"] = kk.PreferredEndpoint
+		} else if cfg.KiroPreferredEndpoint != "" {
+			// Apply global default if not overridden by specific key
+			attrs["preferred_endpoint"] = cfg.KiroPreferredEndpoint
+		}
+		if refreshToken != "" {
+			attrs["refresh_token"] = refreshToken
+		}
+		proxyURL := strings.TrimSpace(kk.ProxyURL)
+		a := &coreauth.Auth{
+			ID:         id,
+			Provider:   "kiro",
+			Label:      "kiro-token",
+			Status:     coreauth.StatusActive,
+			ProxyURL:   proxyURL,
+			Attributes: attrs,
+			CreatedAt:  now,
+			UpdatedAt:  now,
+		}
+
+		if refreshToken != "" {
+			if a.Metadata == nil {
+				a.Metadata = make(map[string]any)
+			}
+			a.Metadata["refresh_token"] = refreshToken
+		}
+
 		out = append(out, a)
 	}
 	return out

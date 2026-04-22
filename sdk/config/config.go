@@ -28,11 +28,14 @@ type VertexCompatModel = internalconfig.VertexCompatModel
 type OpenAICompatibility = internalconfig.OpenAICompatibility
 type OpenAICompatibilityAPIKey = internalconfig.OpenAICompatibilityAPIKey
 type OpenAICompatibilityModel = internalconfig.OpenAICompatibilityModel
+type OpenCodeKey = internalconfig.OpenCodeKey
+type OpenCodeModel = internalconfig.OpenCodeModel
 
 type TLS = internalconfig.TLSConfig
 
 const (
 	DefaultPanelGitHubRepository = internalconfig.DefaultPanelGitHubRepository
+	DefaultOpenCodeBaseURL       = internalconfig.DefaultOpenCodeBaseURL
 )
 
 func LoadConfig(configFile string) (*Config, error) { return internalconfig.LoadConfig(configFile) }

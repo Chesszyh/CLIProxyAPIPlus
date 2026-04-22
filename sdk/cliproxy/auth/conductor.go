@@ -3242,7 +3242,9 @@ func (m *Manager) refreshAuth(ctx context.Context, id string) {
 		updated.Runtime = auth.Runtime
 	}
 	updated.LastRefreshedAt = now
-	updated.NextRefreshAfter = time.Time{}
+	// Preserve NextRefreshAfter set by the Authenticator
+	// If the Authenticator set a reasonable refresh time, it should not be overwritten
+	// If the Authenticator did not set it (zero value), shouldRefresh will use default logic
 	updated.LastError = nil
 	updated.UpdatedAt = now
 	if m.shouldRefresh(updated, now) {
