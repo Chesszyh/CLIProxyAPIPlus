@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/logging"
 	coreusage "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/usage"
 )
 
@@ -89,12 +90,16 @@ type modelStats struct {
 
 // RequestDetail stores the timestamp, latency, and token usage for a single request.
 type RequestDetail struct {
-	Timestamp time.Time  `json:"timestamp"`
-	LatencyMs int64      `json:"latency_ms"`
-	Source    string     `json:"source"`
-	AuthIndex string     `json:"auth_index"`
-	Tokens    TokenStats `json:"tokens"`
-	Failed    bool       `json:"failed"`
+	Timestamp  time.Time  `json:"timestamp"`
+	LatencyMs  int64      `json:"latency_ms"`
+	Source     string     `json:"source"`
+	AuthIndex  string     `json:"auth_index"`
+	RequestID  string     `json:"request_id,omitempty"`
+	Method     string     `json:"method,omitempty"`
+	Path       string     `json:"path,omitempty"`
+	StatusCode int        `json:"status_code,omitempty"`
+	Tokens     TokenStats `json:"tokens"`
+	Failed     bool       `json:"failed"`
 }
 
 // TokenStats captures the token usage breakdown for a request.
@@ -178,12 +183,11 @@ func (s *RequestStatistics) Record(ctx context.Context, record coreusage.Record)
 	if modelName == "" {
 		modelName = "unknown"
 	}
+	requestMeta := extractRequestMetadata(ctx)
 	dayKey := timestamp.Format("2006-01-02")
 	hourKey := timestamp.Hour()
 
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	s.totalRequests++
 	if success {
 		s.successCount++
@@ -198,18 +202,25 @@ func (s *RequestStatistics) Record(ctx context.Context, record coreusage.Record)
 		s.apis[statsKey] = stats
 	}
 	s.updateAPIStats(stats, modelName, RequestDetail{
-		Timestamp: timestamp,
-		LatencyMs: normaliseLatency(record.Latency),
-		Source:    record.Source,
-		AuthIndex: record.AuthIndex,
-		Tokens:    detail,
-		Failed:    failed,
+		Timestamp:  timestamp,
+		LatencyMs:  normaliseLatency(record.Latency),
+		Source:     record.Source,
+		AuthIndex:  record.AuthIndex,
+		RequestID:  requestMeta.RequestID,
+		Method:     requestMeta.Method,
+		Path:       requestMeta.Path,
+		StatusCode: requestMeta.StatusCode,
+		Tokens:     detail,
+		Failed:     failed,
 	})
 
 	s.requestsByDay[dayKey]++
 	s.requestsByHour[hourKey]++
 	s.tokensByDay[dayKey] += totalTokens
 	s.tokensByHour[hourKey] += totalTokens
+	s.mu.Unlock()
+
+	notifyRequestStatisticsChanged(s)
 }
 
 func (s *RequestStatistics) updateAPIStats(stats *apiStats, model string, detail RequestDetail) {
@@ -298,8 +309,6 @@ func (s *RequestStatistics) MergeSnapshot(snapshot StatisticsSnapshot) MergeResu
 	}
 
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	seen := make(map[string]struct{})
 	for apiName, stats := range s.apis {
 		if stats == nil {
@@ -351,6 +360,11 @@ func (s *RequestStatistics) MergeSnapshot(snapshot StatisticsSnapshot) MergeResu
 			}
 		}
 	}
+	s.mu.Unlock()
+
+	if result.Added > 0 {
+		notifyRequestStatisticsChanged(s)
+	}
 
 	return result
 }
@@ -397,6 +411,36 @@ func dedupKey(apiName, modelName string, detail RequestDetail) string {
 		tokens.CachedTokens,
 		tokens.TotalTokens,
 	)
+}
+
+type requestMetadata struct {
+	RequestID  string
+	Method     string
+	Path       string
+	StatusCode int
+}
+
+func extractRequestMetadata(ctx context.Context) requestMetadata {
+	meta := requestMetadata{}
+	if ctx == nil {
+		return meta
+	}
+	ginCtx, ok := ctx.Value("gin").(*gin.Context)
+	if !ok || ginCtx == nil {
+		return meta
+	}
+	meta.RequestID = strings.TrimSpace(logging.GetGinRequestID(ginCtx))
+	if ginCtx.Request != nil {
+		meta.Method = strings.TrimSpace(ginCtx.Request.Method)
+		if ginCtx.Request.URL != nil {
+			meta.Path = strings.TrimSpace(ginCtx.Request.URL.Path)
+		}
+	}
+	if meta.Path == "" {
+		meta.Path = strings.TrimSpace(ginCtx.FullPath())
+	}
+	meta.StatusCode = ginCtx.Writer.Status()
+	return meta
 }
 
 func resolveAPIIdentifier(ctx context.Context, record coreusage.Record) string {

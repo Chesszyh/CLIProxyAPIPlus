@@ -264,6 +264,9 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 	managementasset.SetCurrentConfig(cfg)
 	auth.SetQuotaCooldownDisabled(cfg.DisableCooling)
 	applySignatureCacheConfig(nil, cfg)
+	if err := usage.ConfigurePersistence(cfg, configFilePath); err != nil {
+		log.Errorf("failed to configure usage persistence: %v", err)
+	}
 	// Initialize management handler
 	s.mgmt = managementHandlers.NewHandler(cfg, configFilePath, authManager)
 	if optionState.localPassword != "" {
@@ -678,18 +681,18 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.GET("/gitlab-auth-url", s.mgmt.RequestGitLabToken)
 		mgmt.POST("/gitlab-auth-url", s.mgmt.RequestGitLabPATToken)
 		mgmt.GET("/gemini-cli-auth-url", s.mgmt.RequestGeminiCLIToken)
-			mgmt.GET("/antigravity-auth-url", s.mgmt.RequestAntigravityToken)
-			mgmt.GET("/kilo-auth-url", s.mgmt.RequestKiloToken)
-			mgmt.GET("/kimi-auth-url", s.mgmt.RequestKimiToken)
-			mgmt.GET("/iflow-auth-url", s.mgmt.RequestIFlowToken)
-			mgmt.POST("/iflow-auth-url", s.mgmt.RequestIFlowCookieToken)
-			mgmt.GET("/kiro-auth-url", s.mgmt.RequestKiroToken)
-			mgmt.GET("/cursor-auth-url", s.mgmt.RequestCursorToken)
-			mgmt.GET("/github-auth-url", s.mgmt.RequestGitHubToken)
-			mgmt.POST("/oauth-callback", s.mgmt.PostOAuthCallback)
-			mgmt.GET("/get-auth-status", s.mgmt.GetAuthStatus)
-		}
+		mgmt.GET("/antigravity-auth-url", s.mgmt.RequestAntigravityToken)
+		mgmt.GET("/kilo-auth-url", s.mgmt.RequestKiloToken)
+		mgmt.GET("/kimi-auth-url", s.mgmt.RequestKimiToken)
+		mgmt.GET("/iflow-auth-url", s.mgmt.RequestIFlowToken)
+		mgmt.POST("/iflow-auth-url", s.mgmt.RequestIFlowCookieToken)
+		mgmt.GET("/kiro-auth-url", s.mgmt.RequestKiroToken)
+		mgmt.GET("/cursor-auth-url", s.mgmt.RequestCursorToken)
+		mgmt.GET("/github-auth-url", s.mgmt.RequestGitHubToken)
+		mgmt.POST("/oauth-callback", s.mgmt.PostOAuthCallback)
+		mgmt.GET("/get-auth-status", s.mgmt.GetAuthStatus)
 	}
+}
 
 func (s *Server) managementAvailabilityMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -882,6 +885,9 @@ func (s *Server) Stop(ctx context.Context) error {
 	if err := s.server.Shutdown(ctx); err != nil {
 		return fmt.Errorf("failed to shutdown HTTP server: %v", err)
 	}
+	if err := usage.FlushPersistence(); err != nil {
+		return fmt.Errorf("failed to flush usage statistics: %v", err)
+	}
 
 	log.Debug("API server stopped")
 	return nil
@@ -950,6 +956,9 @@ func (s *Server) UpdateClients(cfg *config.Config) {
 
 	if oldCfg == nil || oldCfg.UsageStatisticsEnabled != cfg.UsageStatisticsEnabled {
 		usage.SetStatisticsEnabled(cfg.UsageStatisticsEnabled)
+	}
+	if err := usage.ConfigurePersistence(cfg, s.configFilePath); err != nil {
+		log.Errorf("failed to reconfigure usage persistence: %v", err)
 	}
 
 	if s.requestLogger != nil && (oldCfg == nil || oldCfg.ErrorLogsMaxFiles != cfg.ErrorLogsMaxFiles) {
