@@ -143,8 +143,46 @@ These are the integration hotspots. Most real conflicts will happen here.
 - Do not reintroduce obsolete Anthropic beta injection such as `context-1m-2025-08-07`.
 - Keep upstream behavior when a mainline fix supersedes old plus behavior.
 - Keep Amp proxy gzip handling compatible with upstream tests.
+- Since upstream `v6.10.0`, do not reintroduce the removed in-process usage aggregation package, TUI usage tab, or `/v0/management/usage`, `/usage/export`, `/usage/import` endpoints. Usage statistics should run as an external dashboard/service such as CPA Usage Keeper against the Redis-compatible usage queue.
 
 If a plus-era behavior conflicts with a newer upstream correctness fix, prefer upstream unless there is a verified provider regression.
+
+## Usage Statistics After v6.10.0
+
+Upstream removed the built-in usage statistics UI and memory aggregation in `v6.10.0`. Keep the official upstream management panel current and run usage analytics separately.
+
+Recommended service:
+
+- `https://github.com/Willxup/cpa-usage-keeper`
+- Uses CLIProxyAPI as the data source.
+- Persists request usage into SQLite.
+- Reads the Redis-compatible usage queue exposed by CLIProxyAPI on the normal service port.
+- Serves its own dashboard, so `management.html` can stay aligned with upstream CPAMC.
+
+CPA must keep management enabled and usage queue publishing enabled:
+
+```yaml
+remote-management:
+  secret-key: "<management key or bcrypt hash>"
+usage-statistics-enabled: true
+redis-usage-queue-retention-seconds: 60
+```
+
+For CPA Usage Keeper, provide the plaintext management key through its environment. If the CPA config only contains a bcrypt hash, reuse the original plaintext key or set a separate `MANAGEMENT_PASSWORD` environment variable for the CPA service and give that value to the keeper.
+
+Minimal local keeper environment:
+
+```env
+CPA_BASE_URL=http://127.0.0.1:8317
+CPA_MANAGEMENT_KEY=<plaintext-management-key>
+REDIS_QUEUE_ADDR=127.0.0.1:8317
+USAGE_SYNC_MODE=redis
+APP_PORT=8080
+AUTH_ENABLED=true
+LOGIN_PASSWORD=<keeper-login-password>
+WORK_DIR=/home/chesszyh/.cli-proxy-api/usage-keeper
+TZ=Asia/Shanghai
+```
 
 ## Commit Strategy
 

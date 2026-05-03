@@ -62,6 +62,7 @@ func TestGitHubCopilotClaudeModelsSupportMessages(t *testing.T) {
 
 func TestCodexStaticModelsIncludeGPT55(t *testing.T) {
 	tierModels := map[string][]*ModelInfo{
+		"free": GetCodexFreeModels(),
 		"team": GetCodexTeamModels(),
 		"plus": GetCodexPlusModels(),
 		"pro":  GetCodexProModels(),
@@ -82,12 +83,6 @@ func TestCodexStaticModelsIncludeGPT55(t *testing.T) {
 		t.Fatal("expected LookupStaticModelInfo to find gpt-5.5")
 	}
 	assertGPT55ModelInfo(t, "lookup", model)
-}
-
-func TestCodexFreeModelsExcludeGPT55(t *testing.T) {
-	if model := findModelInfo(GetCodexFreeModels(), "gpt-5.5"); model != nil {
-		t.Fatalf("expected codex free tier to exclude gpt-5.5, got %+v", model)
-	}
 }
 
 func findModelInfo(models []*ModelInfo, id string) *ModelInfo {
