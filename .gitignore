@@ -16,6 +16,8 @@ conv/*
 temp/*
 refs/*
 tmp/*
+plugins/*
+examples/plugin/bin/*
 
 # Storage backends
 pgstore/*
